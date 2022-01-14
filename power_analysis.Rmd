@@ -1,0 +1,226 @@
+---
+title: "Power Analysis"
+author: "Tobias Dienlin"
+output:
+  html_document:
+    df_print: paged
+#    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(1)
+```
+
+```{r packages, message=FALSE, results='hide'}
+library(ggplot2); library(tidyverse)
+```
+
+# Background
+
+Here, I run some power analysis for a study on online political participation. In the study, people use a social networking site where they discuss political matters. The website is experimentally manipulated (2 x 2 design). First, the persistence of the comments is manipulated (permanent vs. ephemeral), as well as identification (identifiable vs. anonymous).
+
+# Custom functions
+
+In this project, we create several custom functions, which you can find here.
+
+```{r}
+generate_design <- function(groupsize, persis, ident, 
+                            topics, repetition, ...){
+  
+  # function generates underlying (empty) datastructure
+  
+  # count number of groups
+  groups <- persis * ident * topics * repetition
+  
+  # make design
+  expand.grid(
+    participant = 1:groupsize, 
+    persistence = 1:persis, 
+    identification = 1:ident, 
+    topic = 1:topics,
+    repetition = 1:repetition) %>% 
+    as.data.frame() %>% 
+    rownames_to_column("id") %>% 
+    mutate(
+      persistence = ifelse(.$persistence == 1, 0, 1),
+      identification = ifelse(.$identification == 1, 0, 1),
+      group = rep(c(1:groups), each = groupsize))
+}
+
+sim_d <- function(d_frame, seed, effects, sd, groupsize, ...){
+  
+  # simulate data
+  
+  # set seed to make results reproducible
+  set.seed(seed)
+
+  # create words
+  ifelse(d_frame$persistence == 1 & d_frame$identification == 1, rnorm(groupsize, effects[1], sd),
+         ifelse(d_frame$persistence == 1 & d_frame$identification == 0, rnorm(groupsize, effects[2], sd),
+                ifelse(d_frame$persistence == 0 & d_frame$identification == 1, rnorm(groupsize, effects[3], sd),
+                       rnorm(groupsize, effects[4], sd))))
+}
+
+fit_d <- function(object, ...) {
+
+  # analyze data
+  lm(words ~ persistence + identification, object) %>% 
+    summary() %>% 
+    coefficients() %>%
+    data.frame() %>% 
+    rownames_to_column("predictor") %>% 
+    filter(predictor != "(Intercept)") %>% 
+    mutate(predictor = as.factor(predictor),
+           n = nrow(d),
+           p = Pr...t..)
+}
+
+des_sim_fit <- function(...){
+  d_frame <- generate_design(...)
+  words <- sim_d(d_frame, ...)
+  d <- cbind(d_frame, words)
+  fit_d(d)
+}
+```
+
+# Define study design and sample size
+
+```{r}
+# study design
+groupsize_n   <- 20
+persis_n      <- 2
+ident_n       <- 2 
+topics_n      <- 3
+repetition_n  <- 3
+
+# overall sample size
+sample_size <- groupsize_n * persis_n * ident_n * topics_n * repetition_n
+```
+
+We define our study design as follows:
+
+- `r groupsize_n` participants per group
+- `r persis_n` persistence conditions
+- `r ident_n` identification conditions
+- `r topics_n` differnet topics to be discussed
+- `r repetition_n` repetitions of this set-up
+
+# Create data frame
+
+We then create an empty data frame, in which we will then later simulate the data.
+
+```{r}
+# create design frame
+d_frame <- generate_design(
+  groupsize  = groupsize_n,
+  persis     = persis_n,  
+  ident      = ident_n,     
+  topics     = topics_n,  
+  repetition = repetition_n
+  )
+
+d_frame
+```
+
+Check if data-frame is alright.
+
+```{r}
+xtabs(~persistence + identification + topic + repetition, d_frame)
+```
+
+Allocation of participants to experimental groups worked just fine.
+
+# Define effect size
+
+We first need to define likely effects. We assume normal distribution, a mean of zero and a standard deviation of one. We can hence think of effects in terms of Cohen's d: .2 = small, .5 = medium, and .8 = large.
+
+|              | persistent | ephemeral |
+|--------------|:----------:|:---------:|
+| identifiable |    -.40    |   -.20    |
+| anonymous    |    -.20    |     0     |
+
+This should lead to a main effect of persistence of d = -.20 and a main effect of identifiability of d = -.20.
+
+```{r}
+# effect sizes
+m_pers_iden <- -.4
+m_pers_anon <- -.2
+m_ephm_iden <- -.2
+m_ephm_anon <-   0
+effects_est <- c(m_pers_iden, m_pers_anon, m_ephm_iden, m_ephm_anon)
+sd_est <- 1
+```
+
+# Test run
+
+Let's create a single data-set and analyze it.
+
+```{r}
+words <- sim_d(d_frame, seed = 1, effects_est, sd_est, groupsize_n)
+d <- cbind(d_frame, words)
+```
+
+Let's check if means were created alright:
+
+```{r}
+d %>% 
+  group_by(persistence, identification) %>% 
+  summarize(mean = mean(words))
+```
+
+Sample size small and single study, but general tendency seems to be alright.
+
+Let's also quickly run regression.
+
+```{r}
+lm(words ~ persistence + identification, d) %>% 
+  summary()
+```
+
+Results look reasonable. Both persistence and identification reduce disclosure.
+
+# Power analysis
+
+```{r}
+n_sim <- 1000
+```
+
+We run a power analysis with `r n_sim` simulations.
+
+```{r}
+sims <-
+  tibble(seed = 1:n_sim) %>% 
+  mutate(
+    effect = map(seed, des_sim_fit, 
+                 groupsize = groupsize_n, persis = persis_n, ident = ident_n, 
+                 topics = topics_n, repetition = repetition_n, 
+                 effects = effects_est, sd = sd_est)
+    ) %>% 
+  unnest(effect) %>% 
+  as.data.frame()
+sims
+```
+
+We visualize the results.
+
+```{r}
+ggplot(sims, aes(seed, Estimate, color = p < .05)) +
+  geom_point() + 
+  facet_wrap(~predictor) +
+  scale_color_manual(values = c("grey", "blue2"))
+```
+
+We compute our power.
+
+```{r}
+power <- 
+  sims %>% 
+  group_by(predictor) %>% 
+  summarize(power = sum(Pr...t.. < .05) / n_sim,
+            effect = mean(Estimate)) %>% 
+  as.data.frame() %>% 
+  print
+```
+
+Successfully reproduces the effect size we determined a priori.
