@@ -92,7 +92,7 @@ groupsize_n   <- 20
 persis_n      <- 2
 ident_n       <- 2 
 topics_n      <- 3
-repetition_n  <- 3
+repetition_n  <- 4
 
 # overall sample size
 sample_size <- groupsize_n * persis_n * ident_n * topics_n * repetition_n
